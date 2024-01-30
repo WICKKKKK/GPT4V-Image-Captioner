@@ -28,7 +28,7 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
     torch_type = torch.bfloat16
 else:
-    torch_type = torch.float16
+    torch_type = torch.float
 
 print("========Use torch type as:{} with device:{}========\n\n".format(torch_type, DEVICE))
 
