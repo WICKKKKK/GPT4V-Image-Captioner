@@ -33,29 +33,60 @@ def addition_prompt_process(prompt, image_path):
     return new_prompt
 
 # API使用
+def is_ali(api_url):
+    if api_url.endswith("/v1/services/aigc/multimodal-generation/generation"):
+        return True
+    else:
+        return False
+
 def run_openai_api(image_path, prompt, api_key, api_url, quality=None, timeout=10):
     prompt = addition_prompt_process(prompt, image_path)
     # print("prompt{}:",prompt)
     with open(image_path, "rb") as image_file:
         image_base64 = base64.b64encode(image_file.read()).decode('utf-8')
 
-    data = {
-        "model": "gpt-4-vision-preview",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {
-                        "url": f"data:image/jpeg;base64,{image_base64}",
-                        "detail": f"{quality}"
+    if is_ali(api_url):
+        # Qwen-VL
+        data = {
+            "model": "qwen-vl-chat-v1",
+            "input": {
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": [
+                            {"text": "You are a helpful assistant."}
+                        ]
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"image": f"data:image/jpeg;base64,{image_base64}"},
+                            {"text": prompt}
+                        ]
                     }
-                     }
                 ]
-            }
-        ],
-        "max_tokens": 300
-    }
+            },
+            "parameters": {}
+        }
+    else:
+        # GPT-4V
+        data = {
+            "model": "gpt-4-vision-preview",
+            "messages": [
+                {
+                    "role": "user",
+                    "content":
+                    [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url":
+                            {"url": f"data:image/jpeg;base64,{image_base64}",
+                            "detail": f"{quality}"}
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 300
+        }
 
     headers = {
         "Content-Type": "application/json",
@@ -73,7 +104,8 @@ def run_openai_api(image_path, prompt, api_key, api_url, quality=None, timeout=1
 
         try:
             response = s.post(api_url, headers=headers, json=data, timeout=timeout)
-            response.raise_for_status()  # 如果请求失败，将抛出 HTTPError
+            response.raise_for_status()
+        # 连接错误回显
         except requests.exceptions.HTTPError as errh:
             return f"HTTP Error: {errh}"
         except requests.exceptions.ConnectionError as errc:
@@ -89,7 +121,11 @@ def run_openai_api(image_path, prompt, api_key, api_url, quality=None, timeout=1
         if 'error' in response_data:
             return f"API error: {response_data['error']['message']}"
 
-        caption = response_data["choices"][0]["message"]["content"]
+        if is_ali(api_url):
+            caption = response_data["choices"][0]["message"]["content"]
+        else:
+            caption = response_data["output"]["choices"][0]["message"]["content"]
+
         return caption
     except Exception as e:
         return f"Failed to parse the API response: {e}\n{response.text}"
@@ -107,15 +143,24 @@ def save_api_details(api_key, api_url):
         with open(API_PATH, 'w', encoding='utf-8') as f:
             json.dump(settings, f)
 
-def save_state(mod):
-    settings = {
-        'model' : f'Cog-{mod}',
-        'api_key': "",
-        'api_url': "http://127.0.0.1:8000/v1/chat/completions"
-    }
+def save_state(llm, mod, key, url):
+    if llm == "GPT":
+        settings = {
+            'model': 'GPT',
+            'api_key': key,
+            'api_url': url
+        }
+        output = f"Set {llm} as default. / {llm}已设为默认"
+    else:
+        settings = {
+            'model' : f'Cog-{mod}',
+            'api_key': "",
+            'api_url': "http://127.0.0.1:8000/v1/chat/completions"
+        }
+        output = f"Set {mod} as default. / {mod}已设为默认"
     with open(API_PATH, 'w', encoding='utf-8') as f:
         json.dump(settings, f)
-    return f"Set {mod} as default. / {mod}已设为默认"
+    return output
 
 def get_api_details():
     # 读取API设置
@@ -153,7 +198,7 @@ def downloader(model_type, acceleration):
             max_workers=8
         )
     return f"{model_type} Model download completed. / {model_type}模型下载完成"
-        
+
 def installer():
     script_path = '.\install_script\installcog'
     if platform.system() == "Windows":
