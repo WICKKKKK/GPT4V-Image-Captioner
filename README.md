@@ -2,11 +2,15 @@
 
 [中文版说明](https://github.com/jiayev/GPT4V-Image-Captioner/blob/main/README-CN.md)
 
-This is a multifunctional image processing toolbox built with Gradio, capable of tagging images using the GPT-4-vision API or the [cogVLM](https://github.com/THUDM/CogVLM) model. Key features include:
+We now have [sd-webui-GPT4V-Image-Captioner](https://github.com/SleeeepyZhou/sd-webui-GPT4V-Image-Captioner) for SD WebUI
+
+This is a multifunctional image processing toolbox built with Gradio, capable of tagging images using the GPT-4-vision API, the [cogVLM](https://github.com/THUDM/CogVLM) model, [Qwen-VL](https://huggingface.co/Qwen)(Alibaba Cloud), the [Moondream](https://github.com/vikhyat/moondream) model. 
+
+Key features include:
 
 - One-click installation and use
 - Single image and multi-image batch tagging
-- Choice of online GPT4V & local CogVLM models
+- Choice of online GPT4V or [Qwen-VL](https://huggingface.co/Qwen)(Alibaba Cloud) & local CogVLM and Moondream models
 - Visual tag analysis and processing
 - Image pre-compression
 - Keyword filtering and watermark image recognition

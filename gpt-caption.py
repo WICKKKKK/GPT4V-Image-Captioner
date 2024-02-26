@@ -1,5 +1,5 @@
-from unittest import result
 import gradio as gr
+import argparse
 import os
 import shutil
 import threading
@@ -15,9 +15,8 @@ import socket
 from lib.Img_Processing import process_images_in_folder, run_script
 from lib.Tag_Processor import modify_file_content, process_tags
 from lib.GPT_Prompt import get_prompts_from_csv, save_prompt, delete_prompt
-from lib.Api_Utils import run_openai_api, save_api_details, get_api_details, downloader, installer, save_state
+from lib.Api_Utils import run_openai_api, save_api_details, get_api_details, downloader, installer, save_state, qwen_api_switch
 from lib.Detecter import detecter
-
 
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 mod_default, saved_api_key, saved_api_url = get_api_details()
@@ -219,7 +218,7 @@ def classify_images(api_key, api_url, quality, prompt, timeout, detect_file_hand
         for rule_bool, rule_input in rules:
             if (rule_bool and rule_input in caption) or (not rule_bool and rule_input not in caption):
                 matching_rules.append(rule_input)
-        
+
         if matching_rules:
             folder_name = "-".join(matching_rules)
             target_folder = os.path.join(o_dir, folder_name)
@@ -265,28 +264,32 @@ def classify_images(api_key, api_url, quality, prompt, timeout, detect_file_hand
     return results
 
 # api
-def switch_API(api, cogmod, state):
-    if api == 'GPT':
+def switch_API(api, state):
+    def is_connection():
+        try:
+            socket.create_connection(("127.0.0.1", 8000), timeout=1)
+            print("API has started.")
+            return True
+        except (socket.timeout, ConnectionRefusedError):
+            return False
+    if api[:3] == 'GPT' or api[:4] == "qwen":
+        if is_connection():
+            requests.post(f"http://127.0.0.1:8000/v1/close")
         key = saved_api_key
         url = saved_api_url
         time_out = 10
-        s_state = "GPT"
-
-    elif api == 'Cog':
-
-        def is_connection():
-            try:
-                socket.create_connection(("127.0.0.1", 8000), timeout=1)
-                print("API has started.")
-                return True
-            except (socket.timeout, ConnectionRefusedError):
-                return False
-
-        if is_connection():
-            if state[-3:] != cogmod:
-                requests.post(f"http://127.0.0.1:8000/v1/{cogmod}")
+        if api[:4] == "qwen" and url.endswith("/v1/services/aigc/multimodal-generation/generation"):
+            mod = qwen_api_switch(api)
         else:
-            API_command = f'python cog_openai_api.py --model {cogmod}'
+            mod = 'GPT4V'
+        s_state = mod
+
+    elif api[:3] == 'Cog' or api[:4] == "moon":
+        if is_connection():
+            if state != api:
+                requests.post(f"http://127.0.0.1:8000/v1/{api}")
+        else:
+            API_command = f'python openai_api.py --mod {api}'
             subprocess.Popen(API_command,shell=True)
             while True:
                 if is_connection():
@@ -298,7 +301,7 @@ def switch_API(api, cogmod, state):
         key = ""
         url = "http://127.0.0.1:8000/v1/chat/completions"
         time_out = 300
-        s_state = f"Cog-{cogmod}"
+        s_state = api
 
     return key, url, time_out, s_state
 
@@ -422,11 +425,12 @@ with gr.Blocks(title="GPT4V captioner") as demo:
             with gr.Row():
                 detect_stop_button = gr.Button("Stop Batch Processing / 停止批量处理")
                 detect_stop_button.click(stop_batch_processing, inputs=[], outputs=detect_batch_output)
-        with gr.Tab("WD1.4 Tag Polishing / WD1.4 标签润色"):
+        with gr.Tab("Tag Polishing / 标签润色"):
             gr.Markdown("""
-                    使用WD1.4对图片进行打标后，在上方prompt中使用“Describe this image in a very detailed manner and refer these prompt tags:{大括号里替换为放置额外tags文件的目录，会自动读取和图片同名txt。比如 D:\ abc\}”\n
-                    After marking the image using WD1.4, enter the prompt in the “” marks in the prompt box above.
-                        “Replace this with the directory where additional tags files are placed, which will automatically read the txt file with the same name as the image. For example, D: \ abc\}”
+                    使用其他打标器(如WD1.4)对图片进行打标后，在上方prompt中使用“Describe this image in a very detailed manner and refer these prompt tags:{大括号里替换为放置额外tags文件的目录，会自动读取和图片同名txt。比如 D:\ abc\}”\n
+                    After marking the image using other captioner(such as WD1.4), enter the prompt in the “” marks in the prompt box.
+                        “Describe this image in a very detailed manner and refer these prompt tags:
+                        {This is the txt file path for captions, will automatically read the txt file with the same name as the image. For example, D: \ abc\}”
                     """)
         with gr.Tab("Image filtering / 图片筛选"):
             gr.Markdown("""
@@ -523,35 +527,46 @@ with gr.Blocks(title="GPT4V captioner") as demo:
                                   outputs=[tag_counts_output, wordcloud_output, network_graph_output, output_message])
 
 
-    # CogVLM一键
+    # API Config
     with gr.Tab("API Config / API配置"):
-        with gr.Row():
-            gr.Markdown("""
-        ⚠ **Warning / 警告**: 
-        This is the API configuration page. To use CogVLM, you need to configure environment and download it, which is **approximately 35g+** in size and takes a long time ***(really, really long)***. 
-                        After installation and download, the total space occupied is about ***40g+***. Please confirm that the disk space is sufficient.
-                        In addition, in terms of model selection, the vqa model performs better but slower, while the chat model is faster but slightly weaker.
-                        Please confirm that your GPU has sufficient graphics memory ***(approximately 14g ±)*** when using CogVLM
+        # 本地模型配置
+        with gr.Accordion("Local Model / 使用本地模型", open=True):
+            with gr.Row():
+                gr.Markdown("""
+            ⚠ **Warning / 警告**: 
+            This is the API configuration page. To use local model, you need to configure environment and download it.
+                            **Moondream** model **size is about 22g+**, and it takes a long time, Please confirm that the disk space is sufficient.Please confirm that your GPU has sufficient graphics memory ***(approximately 6g)*** 
+                            **CogVLM**, you need to configure environment and download it, which is **approximately 35g+** in size and takes a long time ***(really, really long)***. 
+                            After installation and download, the total space occupied is about ***40g+***. Please confirm that the disk space is sufficient.
+                            In addition, in terms of model selection, the vqa model performs better but slower, while the chat model is faster but slightly weaker.
+                            Please confirm that your GPU has sufficient graphics memory ***(approximately 14g ±)*** when using CogVLM
                         
-        此为API配置页面，使用CogVLM需要配置相关环境并下载模型，**大小约为35g+**，需要较长时间 ***(真的很长)***。安装以及下载完成后，总占用空间约为40g+，请确认磁盘空间充足。
-                        模型选择上，vqa模型效果更好但是更慢，chat模型更快但是效果略弱。使用CogVLM请确认自己的显卡有足够的显存 ***(约14g±)***
+            此为API配置页面，使用本地模型需要配置相关环境并下载模型，
+                            ***moondream***模型大小约为**22g+**需要较长时间，请确认磁盘空间充足。显存需求约为6g，请确认自己的显卡有足够的显存。
+                            ***CogVLM***大小约为**35g+**，需要较长时间 **(真的很长)**。安装以及下载完成后，总占用空间约为40g+，请确认磁盘空间充足。
+                            模型选择上，vqa模型效果更好但是更慢，chat模型更快但是效果略弱。使用CogVLM请确认自己的显卡有足够的显存 ***(约14g±)***
             """)
+            with gr.Row():
+                detecter_output = gr.Textbox(label="Check Env / 环境检测", interactive=False)
+                detect_button = gr.Button("Check / 检查", variant='primary')
+            with gr.Row():
+                models_select = gr.Radio(label="Choose Models / 选择模型", choices=["moondream","vqa", "chat"], value="moondream")
+                acceleration_select = gr.Radio(label="Choose Default Plz / 选择是否国内加速(如果使用国内加速,请关闭魔法上网)", choices=["CN", "default"],
+                                               value="CN")
+                download_button = gr.Button("Download Models / 下载模型", variant='primary')
+                install_button = gr.Button("Install / 安装", variant='primary')
 
+        # API配置
+        mod_list = [
+            "GPT4V",
+            "qwen-vl-plus",
+            "qwen-vl-max",
+            "moondream",
+            "Cog-vqa",
+            "Cog-chat"
+            ]
         with gr.Row():
-            detecter_output = gr.Textbox(label="Check Env / 环境检测", interactive=False)
-            detect_button = gr.Button("Check / 检查", variant='primary')
-
-        with gr.Row():
-            models_select = gr.Radio(label="Choose Models / 选择模型", choices=["vqa", "chat"], value="vqa")
-            acceleration_select = gr.Radio(label="Choose Default Plz / 选择是否国内加速(如果使用国内加速,请关闭魔法上网)", choices=["CN", "default"],
-                                           value="CN")
-            download_button = gr.Button("Download Models / 下载模型", variant='primary')
-            install_button = gr.Button("Install / 安装", variant='primary')
-
-        with gr.Row():
-            switch_select = gr.Radio(label="Choose API / 选择API", choices=["GPT", "Cog"], value="GPT")
-            models_switch = gr.Radio(label="Choose Use Cog Models / 选择使用的Cog模型", choices=["vqa", "chat"],
-                                     value="vqa")
+            switch_select = gr.Dropdown(label="Choose API / 选择API", choices=mod_list, value="GPT4V")
             A_state = gr.Textbox(label="API State / API状态", interactive=False, value=mod_default)
             switch_button = gr.Button("Switch / 切换", variant='primary')
             set_default = gr.Button("Set as default / 设为默认", variant='primary')
@@ -561,14 +576,30 @@ with gr.Blocks(title="GPT4V captioner") as demo:
         download_button.click(downloader, inputs=[models_select, acceleration_select],
                               outputs=detecter_output)
         install_button.click(installer, outputs=detecter_output)
-        switch_button.click(switch_API, inputs=[switch_select, models_switch, A_state],
+        switch_button.click(switch_API, inputs=[switch_select, A_state],
                             outputs=[api_key_input, api_url_input, timeout_input, A_state])
-        set_default.click(save_state, inputs=[switch_select, models_switch, api_key_input, api_url_input], outputs=A_state)
+        set_default.click(save_state, inputs=[switch_select, api_key_input, api_url_input], outputs=A_state)
 
-    gr.Markdown(
-        "### Developers: [Jiaye](https://civitai.com/user/jiayev1),&nbsp;&nbsp;[LEOSAM 是只兔狲](https://civitai.com/user/LEOSAM),&nbsp;&nbsp;[SleeeepyZhou](https://civitai.com/user/SleeeepyZhou),&nbsp;&nbsp;[Fok](https://civitai.com/user/fok3827)&nbsp;&nbsp;|&nbsp;&nbsp;Welcome everyone to add more new features to this project.")
+    
+    gr.Markdown("""
+        ### Developers: [Jiaye](https://civitai.com/user/jiayev1),&nbsp;&nbsp;[LEOSAM 是只兔狲](https://civitai.com/user/LEOSAM),&nbsp;&nbsp;[SleeeepyZhou](https://civitai.com/user/SleeeepyZhou),&nbsp;&nbsp;[Fok](https://civitai.com/user/fok3827),&nbsp;&nbsp;[gluttony-10](https://github.com/gluttony-10),&nbsp;&nbsp;[327](https://github.com/327),&nbsp;&nbsp;[十字鱼](https://space.bilibili.com/893892)&nbsp;&nbsp;|&nbsp;&nbsp;Welcome everyone to add more new features to this project.
+                """)
+
+# 启动参数
+def get_args():
+    parser = argparse.ArgumentParser(description='GPT4V-Image-Captioner启动参数')
+    parser.add_argument("--port", type=int, default="8848", help="占用端口，默认8848")
+    parser.add_argument("--listen", action='store_true', help="打开远程连接，默认关闭")
+    parser.add_argument("--share", action='store_true', help="打开gradio共享，默认关闭")
+    return parser.parse_args()
+
+args = get_args()
 
 if __name__ == "__main__":
-    if mod_default != 'GPT':
-        threading.Thread(target=lambda: switch_API('Cog', mod_default[-3:], 'GPT')).start()
-    demo.launch(server_name="0.0.0.0",server_port=8848,share=True)
+    threading.Thread(target=lambda: switch_API(mod_default, 'GPT')).start()
+    demo.launch(
+        server_name="0.0.0.0" if args.listen else None,
+        server_port=args.port,
+        share=args.share,
+        inbrowser=True
+    )
